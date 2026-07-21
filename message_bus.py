@@ -1,0 +1,265 @@
+"""
+Message Bus Protocol — File-based communication layer for the AI agent team.
+
+Agents read tasks from team_bus/tasks/, write results to team_bus/results/,
+and log activity to team_bus/logs/. This is the ONLY way agents communicate.
+"""
+
+import json
+import os
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+class MessageBus:
+    """
+    Shared communication bus for all agents on the team.
+    Each agent gets its own MessageBus instance pointed at the shared directories.
+    """
+
+    def __init__(self, bus_dir="./team_bus"):
+        self.BusDir = Path(bus_dir)
+        self.TaskDir = self.BusDir / "tasks"
+        self.ResultDir = self.BusDir / "results"
+        self.LogDir = self.BusDir / "logs"
+
+        for d in [self.TaskDir, self.ResultDir, self.LogDir]:
+            d.mkdir(parents=True, exist_ok=True)
+
+    def Timestamp(self):
+        return datetime.now(timezone.utc).isoformat()
+
+    # ------------------------------------------------------------------
+    # TASK OPERATIONS
+    # ------------------------------------------------------------------
+
+    def CreateTask(self, assigned_to, title, description, context=None,
+                   priority=3, output_format="json", parent_task_id=None):
+        """Create a new task file and assign it to an agent."""
+        task_id = f"task_{uuid.uuid4().hex[:12]}"
+
+        task = {
+            "task_id": task_id,
+            "assigned_to": assigned_to,
+            "priority": priority,
+            "status": "pending",
+            "title": title,
+            "description": description,
+            "context": context or {},
+            "output_format": output_format,
+            "parent_task_id": parent_task_id,
+            "created_at": self.Timestamp(),
+            "claimed_at": None,
+            "completed_at": None
+        }
+
+        filepath = self.TaskDir / f"{task_id}.json"
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(task, f, indent=2)
+
+        self.Log("bus", f"Created task {task_id} -> {assigned_to}: {title}")
+        return task_id
+
+    def ClaimTask(self, agent_id):
+        """
+        Claim the highest-priority pending task assigned to this agent.
+        Returns the task dict, or None if no tasks are available.
+        """
+        tasks = self.ListPendingTasks(agent_id)
+        if not tasks:
+            return None
+
+        # Sort by priority (1=highest) then by creation time
+        tasks.sort(key=lambda t: (t.get("priority", 3), t.get("created_at", "")))
+
+        task = tasks[0]
+        task["status"] = "in_progress"
+        task["claimed_at"] = self.Timestamp()
+        task["claimed_by"] = agent_id
+
+        filepath = self.TaskDir / f"{task['task_id']}.json"
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(task, f, indent=2)
+
+        self.Log(agent_id, f"Claimed {task['task_id']}: {task['title']}")
+        return task
+
+    def ListPendingTasks(self, agent_id=None):
+        """List all pending tasks, optionally filtered by assigned agent."""
+        tasks = []
+        if not self.TaskDir.exists():
+            return tasks
+
+        for f in self.TaskDir.glob("*.json"):
+            try:
+                task = json.loads(f.read_text(encoding="utf-8"))
+                if task.get("status") != "pending":
+                    continue
+                if agent_id and task.get("assigned_to") != agent_id:
+                    continue
+                tasks.append(task)
+            except (json.JSONDecodeError, KeyError):
+                continue
+
+        return tasks
+
+    def ListMyTasks(self, agent_id):
+        """List all tasks (any status) assigned to this agent."""
+        tasks = []
+        if not self.TaskDir.exists():
+            return tasks
+
+        for f in self.TaskDir.glob("*.json"):
+            try:
+                task = json.loads(f.read_text(encoding="utf-8"))
+                if task.get("assigned_to") == agent_id:
+                    tasks.append(task)
+            except (json.JSONDecodeError, KeyError):
+                continue
+
+        return tasks
+
+    def GetTask(self, task_id):
+        """Read a specific task by ID."""
+        filepath = self.TaskDir / f"{task_id}.json"
+        if not filepath.exists():
+            return None
+        return json.loads(filepath.read_text(encoding="utf-8"))
+
+    # ------------------------------------------------------------------
+    # RESULT OPERATIONS
+    # ------------------------------------------------------------------
+
+    def PostResult(self, task_id, agent_id, status, data, summary=""):
+        """Post a result for a completed task."""
+        result_id = f"result_{task_id}"
+
+        result = {
+            "result_id": result_id,
+            "task_id": task_id,
+            "agent_id": agent_id,
+            "status": status,
+            "summary": summary,
+            "data": data,
+            "posted_at": self.Timestamp()
+        }
+
+        filepath = self.ResultDir / f"{result_id}.json"
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(result, f, indent=2)
+
+        # Mark task as completed
+        task = self.GetTask(task_id)
+        if task:
+            task["status"] = "completed"
+            task["completed_at"] = self.Timestamp()
+            task_file = self.TaskDir / f"{task_id}.json"
+            with open(task_file, "w", encoding="utf-8") as f:
+                json.dump(task, f, indent=2)
+
+        self.Log(agent_id, f"Posted result for {task_id}: {status}")
+        return result_id
+
+    def GetResult(self, task_id):
+        """Get the result for a specific task."""
+        filepath = self.ResultDir / f"result_{task_id}.json"
+        if not filepath.exists():
+            return None
+        return json.loads(filepath.read_text(encoding="utf-8"))
+
+    def ListResults(self, agent_id=None):
+        """List all results, optionally filtered by agent."""
+        results = []
+        if not self.ResultDir.exists():
+            return results
+
+        for f in self.ResultDir.glob("*.json"):
+            try:
+                result = json.loads(f.read_text(encoding="utf-8"))
+                if agent_id and result.get("agent_id") != agent_id:
+                    continue
+                results.append(result)
+            except (json.JSONDecodeError, KeyError):
+                continue
+
+        return results
+
+    def SendFeedback(self, task_id, feedback):
+        """
+        Send feedback on a result, re-opening the task for revision.
+        Creates a new task with the feedback as context.
+        """
+        task = self.GetTask(task_id)
+        if not task:
+            return None
+
+        result = self.GetResult(task_id)
+        new_context = {
+            "original_task": task,
+            "previous_result": result,
+            "feedback": feedback
+        }
+
+        new_task_id = self.CreateTask(
+            assigned_to=task["assigned_to"],
+            title=f"REVISION: {task['title']}",
+            description=f"Revise your previous work based on feedback.\n\nFEEDBACK:\n{feedback}",
+            context=new_context,
+            priority=1,  # Revisions are high priority
+            parent_task_id=task_id
+        )
+
+        self.Log("bus", f"Feedback loop: {task_id} -> {new_task_id}")
+        return new_task_id
+
+    # ------------------------------------------------------------------
+    # LOGGING
+    # ------------------------------------------------------------------
+
+    def Log(self, agent_id, message):
+        """Append a log entry for the agent."""
+        log_file = self.LogDir / f"{agent_id}.log"
+        entry = f"[{self.Timestamp()}] {message}\n"
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(entry)
+
+    def GetLog(self, agent_id, tail=50):
+        """Read the last N lines of an agent's log."""
+        log_file = self.LogDir / f"{agent_id}.log"
+        if not log_file.exists():
+            return ""
+        lines = log_file.read_text(encoding="utf-8").strip().split("\n")
+        return "\n".join(lines[-tail:])
+
+    # ------------------------------------------------------------------
+    # STATUS / DASHBOARD
+    # ------------------------------------------------------------------
+
+    def GetTeamStatus(self):
+        """Return a summary of all tasks and their statuses."""
+        tasks = []
+        if self.TaskDir.exists():
+            for f in self.TaskDir.glob("*.json"):
+                try:
+                    tasks.append(json.loads(f.read_text(encoding="utf-8")))
+                except (json.JSONDecodeError, KeyError):
+                    continue
+
+        status = {
+            "total": len(tasks),
+            "pending": sum(1 for t in tasks if t.get("status") == "pending"),
+            "in_progress": sum(1 for t in tasks if t.get("status") == "in_progress"),
+            "completed": sum(1 for t in tasks if t.get("status") == "completed"),
+            "by_agent": {}
+        }
+
+        for t in tasks:
+            agent = t.get("assigned_to", "unassigned")
+            if agent not in status["by_agent"]:
+                status["by_agent"][agent] = {"pending": 0, "in_progress": 0, "completed": 0}
+            st = t.get("status", "pending")
+            status["by_agent"][agent][st] = status["by_agent"][agent].get(st, 0) + 1
+
+        return status

@@ -1,0 +1,155 @@
+# ============================================================
+# ORCHESTRATOR — Team lead. Breaks down work, assigns tasks,
+# integrates results, makes final decisions.
+# ============================================================
+
+id: "orchestrator"
+provider: "deepseek"
+model: "deepseek-chat"
+team: "team_a"
+temperature: 0.4
+max_turns: 20
+
+position:
+  title: "Team Orchestrator"
+  reports_to: "user"
+  can_delegate_to: ["researcher", "coder", "reviewer"]
+  authority_level: "execute"
+  description: >
+    You are the team lead. You receive high-level objectives from the user,
+    break them into subtasks, assign them to the right specialist, and
+    integrate their outputs into a final deliverable. You make the final
+    call on decisions.
+
+system_prompt: |
+  You are a Team Orchestrator leading a small AI development team.
+
+  YOUR TEAM:
+  - researcher: Investigates requirements, APIs, documentation. Produces specs and recommendations.
+  - coder: Implements features, writes code, fixes bugs. Produces code changes.
+  - reviewer: Reviews code for correctness, security, and style. Produces review reports.
+
+  YOUR ROLE:
+  1. When given an objective, break it down into sequential or parallel subtasks.
+  2. Create a task file for each subtask in the team_bus/tasks/ directory.
+  3. Wait for results in team_bus/results/.
+  4. If a result is unsatisfactory, send it back with feedback.
+  5. When all subtasks are done, synthesize the final answer for the user.
+
+  TASK FILE FORMAT:
+  Create JSON files in team_bus/tasks/ with this structure:
+  {
+    "task_id": "unique-id",
+    "assigned_to": "researcher|coder|reviewer",
+    "priority": 1-5,
+    "title": "short description",
+    "description": "detailed instructions",
+    "context": { ... relevant data from previous steps ... },
+    "output_format": "json|text|code",
+    "created_at": "ISO timestamp"
+  }
+
+  RULES:
+  1. Always assign tasks to the specialist best suited for it.
+  2. Provide full context in each task — agents don't share memory.
+  3. If stuck, ask the user for clarification rather than guessing.
+  4. Track which tasks are pending, in progress, and done.
+
+tools:
+  - name: list_team
+    description: "List all team members and their status"
+    parameters: {}
+
+  - name: create_task
+    description: "Create a new task for a team member"
+    parameters:
+      assigned_to:
+        type: string
+        description: "Agent ID to assign to (researcher, coder, reviewer)"
+        required: true
+      title:
+        type: string
+        description: "Short task title"
+        required: true
+      description:
+        type: string
+        description: "Detailed task description with context"
+        required: true
+      priority:
+        type: integer
+        description: "Priority 1-5 (1=highest)"
+        required: false
+
+  - name: check_results
+    description: "Check for completed task results"
+    parameters:
+      task_id:
+        type: string
+        description: "Specific task ID to check, or 'all' for all completed"
+        required: false
+
+  - name: send_feedback
+    description: "Send feedback to an agent, asking them to revise their work"
+    parameters:
+      task_id:
+        type: string
+        description: "The task ID to send feedback on"
+        required: true
+      feedback:
+        type: string
+        description: "What needs to be improved or changed"
+        required: true
+
+  - name: read_file
+    description: "Read contents of a file"
+    parameters:
+      path:
+        type: string
+        description: "Absolute or relative path to the file"
+        required: true
+
+  - name: list_directory
+    description: "List files and subdirectories in a given path"
+    parameters:
+      path:
+        type: string
+        description: "Directory path to list"
+        required: true
+
+  - name: team_remember
+    description: "Store a finding in team memory so other agents can access it"
+    parameters:
+      topic:
+        type: string
+        description: "Short topic label for this finding"
+        required: true
+      content:
+        type: string
+        description: "The finding or knowledge to store"
+        required: true
+      confidence:
+        type: string
+        description: "Confidence level: high, medium, or low"
+        required: false
+      tags:
+        type: array
+        items:
+          type: string
+        description: "Tags for categorization"
+        required: false
+
+  - name: team_recall
+    description: "Query team memory for past findings"
+    parameters:
+      keyword:
+        type: string
+        description: "Search keyword"
+        required: false
+      tag:
+        type: string
+        description: "Filter by tag"
+        required: false
+      limit:
+        type: integer
+        description: "Max entries to return"
+        required: false

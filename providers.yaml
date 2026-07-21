@@ -1,0 +1,91 @@
+# ============================================================
+# PROVIDER REGISTRY — All available model providers.
+# Agents reference these by name in their agent.yaml.
+# Pricing is per 1M tokens (input / output).
+# ============================================================
+
+providers:
+  deepseek:
+    base_url: "https://api.deepseek.com/v1"
+    api_key_env: "DEEPSEEK_API_KEY"
+    models:
+      deepseek-chat:
+        input_price: 0.14
+        output_price: 0.28
+        description: "General purpose, good balance"
+      deepseek-reasoner:
+        input_price: 0.55
+        output_price: 2.19
+        description: "Reasoning-heavy tasks, research, complex analysis"
+
+  openai:
+    base_url: "https://api.openai.com/v1"
+    api_key_env: "OPENAI_API_KEY"
+    models:
+      gpt-4o:
+        input_price: 2.50
+        output_price: 10.00
+        description: "Most capable, expensive"
+      gpt-4o-mini:
+        input_price: 0.15
+        output_price: 0.60
+        description: "Cheap, fast, good for simple tasks"
+      gpt-3.5-turbo:
+        input_price: 0.50
+        output_price: 1.50
+        description: "Legacy, still usable for trivial work"
+
+  anthropic:
+    base_url: "https://api.anthropic.com/v1"
+    api_key_env: "ANTHROPIC_API_KEY"
+    models:
+      claude-3-5-sonnet:
+        input_price: 3.00
+        output_price: 15.00
+        description: "Strong coding and analysis"
+      claude-3-haiku:
+        input_price: 0.25
+        output_price: 1.25
+        description: "Fast, cheap, good for reviews"
+
+  local:
+    base_url: "http://localhost:11434/v1"
+    api_key_env: "LOCAL_LLM_KEY"
+    models:
+      llama3-70b:
+        input_price: 0.0
+        output_price: 0.0
+        description: "Local Llama 3 70B via Ollama — FREE"
+      llama3-8b:
+        input_price: 0.0
+        output_price: 0.0
+        description: "Local Llama 3 8B via Ollama — FREE, fast"
+      mistral:
+        input_price: 0.0
+        output_price: 0.0
+        description: "Local Mistral via Ollama — FREE"
+      codellama:
+        input_price: 0.0
+        output_price: 0.0
+        description: "Local CodeLlama via Ollama — FREE, code-specialized"
+
+  openrouter:
+    base_url: "https://openrouter.ai/api/v1"
+    api_key_env: "OPENROUTER_API_KEY"
+    models:
+      deepseek/deepseek-chat:
+        input_price: 0.14
+        output_price: 0.28
+        description: "DeepSeek via OpenRouter"
+      anthropic/claude-3-haiku:
+        input_price: 0.25
+        output_price: 1.25
+        description: "Claude Haiku via OpenRouter"
+      meta-llama/llama-3-70b-instruct:
+        input_price: 0.23
+        output_price: 0.40
+        description: "Llama 3 70B via OpenRouter"
+
+# --- DEFAULT PROVIDER (used when agent doesn't specify one) ---
+default_provider: "deepseek"
+default_model: "deepseek-chat"

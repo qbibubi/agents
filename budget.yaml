@@ -1,0 +1,65 @@
+# ============================================================
+# BUDGET CONFIGURATION — Spending limits and enforcement.
+# Caps are in USD. Set to 0 to disable that cap.
+# ============================================================
+
+budget:
+  # --- GLOBAL ---
+  # Hard stop: everything shuts down when this is hit.
+  global_daily_cap: 5.00
+  global_monthly_cap: 50.00
+
+  # --- PER-TEAM CAPS ---
+  # Each team gets its own sub-limit within the global cap.
+  team_caps:
+    team_a:
+      daily: 2.00
+      monthly: 20.00
+    team_b:
+      daily: 2.00
+      monthly: 20.00
+    team_c:
+      daily: 2.00
+      monthly: 20.00
+
+  # --- PER-AGENT CAPS ---
+  # Finest granularity. An agent exceeding its cap is paused
+  # until the next reset period unless allow_overage is true.
+  agent_caps:
+    default:
+      daily: 1.00
+      monthly: 10.00
+
+    # Specific agent overrides (optional)
+    overrides:
+      orchestrator:
+        daily: 1.50
+        monthly: 15.00
+      coder:
+        daily: 1.00
+        monthly: 10.00
+      researcher:
+        daily: 0.75
+        monthly: 7.50
+      reviewer:
+        daily: 0.50
+        monthly: 5.00
+
+  # --- OVERAGE BEHAVIOR ---
+  # When a cap is hit:
+  #   "block"  — refuse API calls, agent pauses
+  #   "warn"   — log warning but allow (DANGEROUS, not recommended)
+  #   "local"  — automatically switch to local model for remaining calls
+  overage_policy: "block"
+  fallback_provider: "local"
+  fallback_model: "llama3-8b"
+
+  # --- RESET INTERVALS ---
+  # Daily caps reset at midnight UTC.
+  # Monthly caps reset on the 1st of the month UTC.
+  # The tracker persists spend to disk and auto-resets.
+  tracker_file: "./team_bus/budget_tracker.json"
+
+  # --- NOTIFICATIONS ---
+  # Warn when spend reaches this percentage of cap.
+  warn_at_percent: 80

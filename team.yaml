@@ -1,0 +1,58 @@
+# ============================================================
+# TEAM MANIFEST — Defines the AI team, its members, and how
+# they coordinate. This is the "org chart" for the agentic team.
+# ============================================================
+
+id: "dev-team"
+name: "Software Development Team"
+
+# --- COORDINATION ---
+# How agents discover and claim work.
+coordination:
+  mode: "bus"                    # file-based message bus
+  bus_dir: "./team_bus"
+  task_dir: "./team_bus/tasks"
+  result_dir: "./team_bus/results"
+  log_dir: "./team_bus/logs"
+  poll_interval_seconds: 5       # how often agents check for new tasks
+  task_timeout_minutes: 30       # tasks older than this get re-queued
+
+# --- WORKFLOW ---
+# Defines the handoff chain: which agent passes to which.
+# This is the DEFAULT flow; the orchestrator can override per-task.
+workflow:
+  steps:
+    - agent: "researcher"
+      output_to: "coder"
+      description: "Research requirements, gather context, produce spec"
+
+    - agent: "coder"
+      output_to: "reviewer"
+      description: "Implement based on spec, produce code changes"
+
+    - agent: "reviewer"
+      output_to: "orchestrator"
+      description: "Review code for bugs, security, style; approve or reject"
+
+# --- TEAM MEMBERS ---
+# Each member references an agent definition file in ./agents/
+members:
+  - id: "orchestrator"
+    definition: "./agents/orchestrator.yaml"
+    description: "Breaks down work, assigns tasks, makes final decisions"
+    can_assign_to: ["researcher", "coder", "reviewer"]
+
+  - id: "researcher"
+    definition: "./agents/researcher.yaml"
+    description: "Researches requirements, APIs, docs; produces specs"
+    can_assign_to: []
+
+  - id: "coder"
+    definition: "./agents/coder.yaml"
+    description: "Implements features, writes code, fixes bugs"
+    can_assign_to: []
+
+  - id: "reviewer"
+    definition: "./agents/reviewer.yaml"
+    description: "Reviews code for correctness, security, style"
+    can_assign_to: []
