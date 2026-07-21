@@ -3,6 +3,10 @@ Message Bus Protocol — File-based communication layer for the AI agent team.
 
 Agents read tasks from team_bus/tasks/, write results to team_bus/results/,
 and log activity to team_bus/logs/. This is the ONLY way agents communicate.
+
+All writes use write-temp-then-rename (atomic on Windows and POSIX) to
+prevent readers from seeing partial files. All reads use a short retry
+backoff to handle the narrow window where a rename isn't yet visible.
 """
 
 import json
@@ -12,6 +16,55 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+
+# ---------------------------------------------------------------------------
+# ATOMIC I/O PRIMITIVES
+# ---------------------------------------------------------------------------
+
+def AtomicWriteJson(filepath, data):
+    """
+    Write JSON atomically: write to temp file in same directory, fsync,
+    then os.replace (atomic on Windows ReplaceFile and POSIX rename).
+    A concurrent reader sees either the old complete file or the new
+    complete file — never a truncated or half-written one.
+    """
+    directory = filepath.parent
+    tmp_path = directory / f".tmp_{uuid.uuid4().hex}_{filepath.name}"
+
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+
+        os.replace(tmp_path, filepath)
+    except Exception:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+        raise
+
+
+def ReadJsonRetry(filepath, retries=3, delay=0.05):
+    """
+    Read JSON with retry backoff. Guards against the rare window on some
+    filesystems where a concurrent rename isn't immediately visible.
+    """
+    last_err = None
+    for attempt in range(retries):
+        try:
+            return json.loads(filepath.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, FileNotFoundError) as e:
+            last_err = e
+            time.sleep(delay * (attempt + 1))
+    raise last_err
+
+
+# ---------------------------------------------------------------------------
+# MESSAGE BUS
+# ---------------------------------------------------------------------------
 
 class MessageBus:
     """
@@ -56,8 +109,7 @@ class MessageBus:
         }
 
         filepath = self.TaskDir / f"{task_id}.json"
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(task, f, indent=2)
+        AtomicWriteJson(filepath, task)
 
         self.Log("bus", f"Created task {task_id} -> {assigned_to}: {title}")
         return task_id
@@ -65,6 +117,8 @@ class MessageBus:
     def ClaimTask(self, agent_id):
         """
         Claim the highest-priority pending task assigned to this agent.
+        Uses a lockfile (O_CREAT | O_EXCL) to prevent two workers from
+        claiming the same task concurrently.
         Returns the task dict, or None if no tasks are available.
         """
         tasks = self.ListPendingTasks(agent_id)
@@ -75,16 +129,34 @@ class MessageBus:
         tasks.sort(key=lambda t: (t.get("priority", 3), t.get("created_at", "")))
 
         task = tasks[0]
-        task["status"] = "in_progress"
-        task["claimed_at"] = self.Timestamp()
-        task["claimed_by"] = agent_id
+        task_path = self.TaskDir / f"{task['task_id']}.json"
 
-        filepath = self.TaskDir / f"{task['task_id']}.json"
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(task, f, indent=2)
+        # Lockfile to close the claim TOCTOU race
+        lock_path = self.TaskDir / f"{task['task_id']}.lock"
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+        except FileExistsError:
+            return None
 
-        self.Log(agent_id, f"Claimed {task['task_id']}: {task['title']}")
-        return task
+        try:
+            # Re-read under lock to confirm it's still pending
+            current = ReadJsonRetry(task_path)
+            if current.get("status") != "pending":
+                return None
+
+            current["status"] = "in_progress"
+            current["claimed_at"] = self.Timestamp()
+            current["claimed_by"] = agent_id
+
+            AtomicWriteJson(task_path, current)
+            self.Log(agent_id, f"Claimed {task['task_id']}: {task['title']}")
+            return current
+        finally:
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
 
     def ListPendingTasks(self, agent_id=None):
         """List all pending tasks, optionally filtered by assigned agent."""
@@ -94,13 +166,13 @@ class MessageBus:
 
         for f in self.TaskDir.glob("*.json"):
             try:
-                task = json.loads(f.read_text(encoding="utf-8"))
+                task = ReadJsonRetry(f)
                 if task.get("status") != "pending":
                     continue
                 if agent_id and task.get("assigned_to") != agent_id:
                     continue
                 tasks.append(task)
-            except (json.JSONDecodeError, KeyError):
+            except (json.JSONDecodeError, KeyError, FileNotFoundError):
                 continue
 
         return tasks
@@ -113,10 +185,10 @@ class MessageBus:
 
         for f in self.TaskDir.glob("*.json"):
             try:
-                task = json.loads(f.read_text(encoding="utf-8"))
+                task = ReadJsonRetry(f)
                 if task.get("assigned_to") == agent_id:
                     tasks.append(task)
-            except (json.JSONDecodeError, KeyError):
+            except (json.JSONDecodeError, KeyError, FileNotFoundError):
                 continue
 
         return tasks
@@ -126,7 +198,10 @@ class MessageBus:
         filepath = self.TaskDir / f"{task_id}.json"
         if not filepath.exists():
             return None
-        return json.loads(filepath.read_text(encoding="utf-8"))
+        try:
+            return ReadJsonRetry(filepath)
+        except (json.JSONDecodeError, FileNotFoundError):
+            return None
 
     # ------------------------------------------------------------------
     # RESULT OPERATIONS
@@ -147,8 +222,7 @@ class MessageBus:
         }
 
         filepath = self.ResultDir / f"{result_id}.json"
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(result, f, indent=2)
+        AtomicWriteJson(filepath, result)
 
         # Mark task as completed
         task = self.GetTask(task_id)
@@ -156,8 +230,7 @@ class MessageBus:
             task["status"] = "completed"
             task["completed_at"] = self.Timestamp()
             task_file = self.TaskDir / f"{task_id}.json"
-            with open(task_file, "w", encoding="utf-8") as f:
-                json.dump(task, f, indent=2)
+            AtomicWriteJson(task_file, task)
 
         self.Log(agent_id, f"Posted result for {task_id}: {status}")
         return result_id
@@ -167,7 +240,10 @@ class MessageBus:
         filepath = self.ResultDir / f"result_{task_id}.json"
         if not filepath.exists():
             return None
-        return json.loads(filepath.read_text(encoding="utf-8"))
+        try:
+            return ReadJsonRetry(filepath)
+        except (json.JSONDecodeError, FileNotFoundError):
+            return None
 
     def ListResults(self, agent_id=None):
         """List all results, optionally filtered by agent."""
@@ -177,11 +253,11 @@ class MessageBus:
 
         for f in self.ResultDir.glob("*.json"):
             try:
-                result = json.loads(f.read_text(encoding="utf-8"))
+                result = ReadJsonRetry(f)
                 if agent_id and result.get("agent_id") != agent_id:
                     continue
                 results.append(result)
-            except (json.JSONDecodeError, KeyError):
+            except (json.JSONDecodeError, KeyError, FileNotFoundError):
                 continue
 
         return results
@@ -196,9 +272,21 @@ class MessageBus:
             return None
 
         result = self.GetResult(task_id)
+
+        # Truncate prior context to avoid bloat on revision cycles.
+        # Keep the original task description and a summary of the prior
+        # result, but drop the full raw data to avoid 3x growth per revision.
+        prior_summary = ""
+        if result and result.get("data", {}).get("output"):
+            raw = result["data"]["output"]
+            if isinstance(raw, str):
+                prior_summary = raw[:2000]
+            else:
+                prior_summary = json.dumps(raw)[:2000]
+
         new_context = {
-            "original_task": task,
-            "previous_result": result,
+            "original_task_description": task.get("description", "")[:2000],
+            "previous_result_summary": prior_summary,
             "feedback": feedback
         }
 
@@ -207,7 +295,7 @@ class MessageBus:
             title=f"REVISION: {task['title']}",
             description=f"Revise your previous work based on feedback.\n\nFEEDBACK:\n{feedback}",
             context=new_context,
-            priority=1,  # Revisions are high priority
+            priority=1,
             parent_task_id=task_id
         )
 
@@ -219,7 +307,7 @@ class MessageBus:
     # ------------------------------------------------------------------
 
     def Log(self, agent_id, message):
-        """Append a log entry for the agent."""
+        """Append a log entry for the agent. Logs are append-only, no atomic rename needed."""
         log_file = self.LogDir / f"{agent_id}.log"
         entry = f"[{self.Timestamp()}] {message}\n"
         with open(log_file, "a", encoding="utf-8") as f:
@@ -243,8 +331,8 @@ class MessageBus:
         if self.TaskDir.exists():
             for f in self.TaskDir.glob("*.json"):
                 try:
-                    tasks.append(json.loads(f.read_text(encoding="utf-8")))
-                except (json.JSONDecodeError, KeyError):
+                    tasks.append(ReadJsonRetry(f))
+                except (json.JSONDecodeError, KeyError, FileNotFoundError):
                     continue
 
         status = {
