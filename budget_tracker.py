@@ -8,6 +8,7 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from message_bus import AtomicWriteJson
 
 
 class BudgetTracker:
@@ -40,7 +41,7 @@ class BudgetTracker:
         }
 
     def SaveState(self):
-        self.TrackerFile.write_text(json.dumps(self.State, indent=2), encoding="utf-8")
+        AtomicWriteJson(self.TrackerFile, self.State)
 
     def ResetIfNeeded(self):
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -181,7 +182,6 @@ class BudgetTracker:
         if team_id:
             team_cap = self.GetTeamCap(team_id)
             if team_cap.get("daily", 0) > 0:
-                team_spend = self.State["teams"].get(team_id, {"daily": 0.0, "monthly": 0.0})
                 pct = (team_spend.get("daily", 0.0) / team_cap["daily"]) * 100
                 if pct >= warn_pct:
                     warnings.append(f"Team {team_id} daily at {pct:.0f}%")

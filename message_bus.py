@@ -133,6 +133,17 @@ class MessageBus:
 
         # Lockfile to close the claim TOCTOU race
         lock_path = self.TaskDir / f"{task['task_id']}.lock"
+
+        # Check for stale lock (default: 300 seconds)
+        if lock_path.exists():
+            try:
+                lock_age = time.time() - lock_path.stat().st_mtime
+                if lock_age > 300:
+                    lock_path.unlink()
+                    self.Log("bus", f"Cleaned stale lock for {task['task_id']}")
+            except OSError:
+                pass
+
         try:
             fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             os.close(fd)

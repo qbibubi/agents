@@ -262,6 +262,11 @@ Memory is team-isolated: Team A cannot read Team B's memory.
 pip install openai pyyaml
 ```
 
+**Windows users**: the `search_code` tool uses `grep`, which is not included with
+vanilla Windows. Install Git Bash (which includes grep) or install ripgrep
+(`choco install ripgrep` / `winget install BurntSushi.ripgrep.MSVC`) and update
+the command in `team_agent_loop.py` line 76 if using ripgrep.
+
 Set API keys as environment variables:
 
 ```bash
@@ -337,12 +342,15 @@ To create a finance research team, only agent YAMLs are needed:
 
 ```
 agents/
-  finance_team/
-    orchestrator.yaml    # id: orchestrator, team: finance_team
-    analyst.yaml         # id: analyst, tools: web_search, team_recall, team_remember
-    risk_assessor.yaml   # id: risk_assessor, tools: web_search, run_shell (safe subset)
-    report_writer.yaml   # id: report_writer, tools: write_file, read_file
+  orchestrator.yaml          # id: orchestrator, team: finance_team
+  analyst.yaml               # id: analyst, tools: web_search, team_recall, team_remember
+  risk_assessor.yaml         # id: risk_assessor, tools: web_search
+  report_writer.yaml         # id: report_writer, tools: write_file, read_file
 ```
+
+Agent YAMLs live flat under `agents/`, NOT in subdirectories. The agent
+loop scans `agents/*.yaml` (non-recursive). Team isolation comes from the
+`team:` field in each YAML, not from directory nesting.
 
 Each YAML defines:
 - Its own `system_prompt` with domain-specific rules and output format
@@ -357,6 +365,21 @@ Run it:
 python team_agent_loop.py --agent analyst --team finance_team
 ```
 
+## Single Agent Demo
+
+The `single_agent_demo/` directory contains a standalone, self-contained example
+of the agent loop without team coordination, budget tracking, or the message bus.
+It's useful for learning the core agent loop concept before adding multi-agent
+complexity. Run it with:
+
+```bash
+cd single_agent_demo
+python agent_loop.py "Review the code in ./src for security issues"
+```
+
+Note: the demo has the same safety fixes as the main framework (shell=False,
+shlex.split, allowlist on run_tests).
+
 ## Tool Reference
 
 ### Available Tool Implementations
@@ -367,9 +390,9 @@ python team_agent_loop.py --agent analyst --team finance_team
 | `write_file` | Create/overwrite a file | Blocks path traversal outside CWD |
 | `search_code` | grep with file type filtering | Safe (read-only) |
 | `list_directory` | List files and subdirectories | Safe (read-only) |
-| `run_tests` | Execute test commands | Allowlist: pytest, npm test, cargo test, go test only |
+| `run_tests` | Execute test commands | Allowlist: pytest, python -m pytest, npm test, cargo test, go test only |
 | `run_shell` | Execute arbitrary shell commands | **DISABLED** — returns error always |
-| `web_search` | Search the web | Placeholder, requires external API setup |
+| `web_search` | Search the web | Placeholder, requires external API setup (see Web Search Setup below) |
 | `create_task` | Create a task for another agent | Safe |
 | `check_results` | Check for completed task results | Has loop detection (5 empty checks = stop) |
 | `send_feedback` | Send revision request to an agent | Safe |
@@ -396,9 +419,24 @@ python team_agent_loop.py --agent analyst --team finance_team
 | Tool whitelist per agent | Agent using tools it shouldn't have |
 | 30-second budget recheck | Agent pausing instead of tight-looping when capped |
 
+## Web Search Setup
+
+The `web_search` tool is a placeholder by default — it returns a "not configured"
+message. To enable it, edit the `web_search` function in `team_agent_loop.py` to
+call one of these APIs:
+
+- **Brave Search**: Get an API key at https://brave.com/search/api/ and set
+  `BRAVE_SEARCH_API_KEY` env var. Call `https://api.search.brave.com/res/v1/web/search`.
+- **SerpAPI**: Get a key at https://serpapi.com/ and set `SERPAPI_API_KEY`.
+  Call `https://serpapi.com/search?q=...&api_key=...`.
+- **Google Custom Search**: Requires a Google Cloud API key + Custom Search Engine CX.
+
+If web_search is not configured, agents that have it in their whitelist will
+receive the placeholder response and should work with local files only.
+
 ## Limitations
 
-- **Polling latency**: workers check for tasks every 5 seconds, adding up to 5s delay per handoff
+- **Polling latency**: workers check for tasks every 5 seconds, adding up to 5s delay per handoff. Note: the `poll_interval_seconds` field in `team.yaml` is currently decorative — the actual interval is hardcoded in `WorkerLoop`.
 - **File I/O under load**: 9-12 agents reading/writing JSON in the same directory can cause contention on Windows
 - **No push notifications**: agents don't wake each other up; the polling model is inherently latent
 - **No cross-team communication**: teams are fully isolated by design. For cross-team contracts, you'd need a shared contracts directory

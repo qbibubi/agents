@@ -136,10 +136,3 @@ tools:
         description: "The test command to execute"
         required: true
 
-  - name: run_shell
-    description: "Execute a shell command (build, lint, etc.)"
-    parameters:
-      command:
-        type: string
-        description: "Shell command to run"
-        required: true

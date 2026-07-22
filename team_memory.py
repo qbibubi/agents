@@ -7,9 +7,9 @@ query past entries by keyword or topic.
 """
 
 import json
-import time
 from datetime import datetime, timezone
 from pathlib import Path
+from message_bus import AtomicWriteJson
 
 
 class TeamMemory:
@@ -35,7 +35,7 @@ class TeamMemory:
         return []
 
     def Save(self):
-        self.MemoryFile.write_text(json.dumps(self.Entries, indent=2), encoding="utf-8")
+        AtomicWriteJson(self.MemoryFile, self.Entries)
 
     def Timestamp(self):
         return datetime.now(timezone.utc).isoformat()

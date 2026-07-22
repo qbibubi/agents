@@ -15,6 +15,7 @@ import os
 import sys
 import time
 import argparse
+import shlex
 import yaml
 import subprocess
 import traceback
@@ -109,7 +110,8 @@ def run_tests(command):
         if not is_safe:
             return {"status": "error", "message": f"Command not in allowlist: {command[:80]}"}
 
-        result = subprocess.run(command, shell=True, capture_output=True,
+        parsed = shlex.split(command)
+        result = subprocess.run(parsed, shell=False, capture_output=True,
                                 text=True, timeout=30, cwd=".")
         return {
             "status": "ok",
@@ -372,18 +374,6 @@ def RunAgent(agent_cfg, task_description, bus, budget, memory, providers_cfg):
             budget.RecordSpend(agent_id, call_cost, team_id)
 
         if msg.tool_calls:
-            # Detect empty check_results loops
-            for tc in msg.tool_calls:
-                if tc.function.name == "check_results":
-                    consecutive_empty_checks += 1
-                else:
-                    consecutive_empty_checks = 0
-
-            if consecutive_empty_checks >= 5:
-                print("  Stopping: 5 consecutive check_results calls with no progress")
-                bus.Log(agent_id, "Stopped: empty check_results loop detected")
-                return "[AGENT STOPPED: too many empty check_results calls — likely waiting with nothing to check]"
-
             for tc in msg.tool_calls:
                 tool_name = tc.function.name
 
@@ -407,6 +397,21 @@ def RunAgent(agent_cfg, task_description, bus, budget, memory, providers_cfg):
                             traceback.print_exc()
                     else:
                         result = {"status": "error", "message": f"Unknown tool: {tool_name}"}
+
+                # Detect empty check_results loops AFTER execution
+                if tool_name == "check_results":
+                    results_list = result.get("results", [])
+                    if not results_list or len(results_list) == 0:
+                        consecutive_empty_checks += 1
+                    else:
+                        consecutive_empty_checks = 0
+                else:
+                    consecutive_empty_checks = 0
+
+                if consecutive_empty_checks >= 5:
+                    print("  Stopping: 5 consecutive check_results calls with no progress")
+                    bus.Log(agent_id, "Stopped: empty check_results loop detected")
+                    return "[AGENT STOPPED: too many empty check_results calls — likely waiting with nothing to check]"
 
                 messages.append({
                     "role": "assistant",
@@ -566,7 +571,6 @@ When all work is done and you're satisfied, provide the FINAL SUMMARY to the use
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Team Agent Loop")
     parser.add_argument("--agent", required=True,
-                        choices=["orchestrator", "researcher", "coder", "reviewer"],
                         help="Which agent role to run as")
     parser.add_argument("--team", default=None,
                         help="Team ID override (default: from agent yaml)")
@@ -583,10 +587,13 @@ if __name__ == "__main__":
     BusDir = ScriptDir / args.bus_dir
     AgentsDir = ScriptDir / "agents"
 
-    agent_yaml = AgentsDir / f"{args.agent}.yaml"
-    if not agent_yaml.exists():
-        print(f"ERROR: Agent definition not found: {agent_yaml}")
+    available_agents = sorted([f.stem for f in AgentsDir.glob("*.yaml")])
+
+    if args.agent not in available_agents:
+        print(f"ERROR: Unknown agent '{args.agent}'. Available: {', '.join(available_agents)}")
         sys.exit(1)
+
+    agent_yaml = AgentsDir / f"{args.agent}.yaml"
 
     agent_cfg = LoadAgent(str(agent_yaml))
 

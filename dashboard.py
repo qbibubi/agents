@@ -4,7 +4,6 @@ Run this in a separate terminal to monitor the team.
 """
 
 import os
-import sys
 import time
 from pathlib import Path
 from message_bus import MessageBus

@@ -6,6 +6,7 @@ or hits max_turns.
 
 import json
 import os
+import shlex
 import yaml
 from openai import OpenAI
 
@@ -67,7 +68,14 @@ def list_directory(path):
 def run_tests(command):
     import subprocess
     try:
-        result = subprocess.run(command, shell=True, capture_output=True,
+        # Allowlist: only permit known safe commands
+        safe_prefixes = ["pytest", "python -m pytest", "npm test", "cargo test", "go test"]
+        is_safe = any(command.strip().startswith(p) for p in safe_prefixes)
+        if not is_safe:
+            return {"status": "error", "message": f"Command not in allowlist: {command[:80]}"}
+
+        parsed = shlex.split(command)
+        result = subprocess.run(parsed, shell=False, capture_output=True,
                                 text=True, timeout=30, cwd=".")
         return {
             "status": "ok",
