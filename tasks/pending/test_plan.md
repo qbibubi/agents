@@ -168,6 +168,17 @@ Set each agent's max_turns to 3 for these tests.
 **Expected:** Second run sees entries from first run via team_recall.
 **Failure mode:** Memory file corrupted, entries lost, team_recall returns empty.
 
+### T18: Track max_turns hits for agent tuning
+**What:** After each test run, check whether any agent hit max_turns. This data informs whether agent YAML turn limits need adjustment (e.g., researcher at 15 vs 20).
+**Steps:**
+1. After any test run, grep agent logs for "AGENT STOPPED: max_turns"
+   ```bash
+   grep -r "AGENT STOPPED: max_turns" team_bus/logs/
+   ```
+2. If any agent consistently hits max_turns across multiple tasks, bump its limit by 5.
+3. If any agent never exceeds 50% of its max_turns, consider lowering it.
+**Expected:** Infrequent max_turns hits during normal operation. Frequent hits indicate a task-scoping or turn-limit problem.
+
 ---
 
 ## KNOWN UNSOLVED ISSUES (documented, not fixed yet)

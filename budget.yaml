@@ -6,7 +6,7 @@
 budget:
   # --- GLOBAL ---
   # Hard stop: everything shuts down when this is hit.
-  global_daily_cap: 5.00
+  global_daily_cap: 0.50
   global_monthly_cap: 50.00
 
   # --- PER-TEAM CAPS ---

@@ -129,7 +129,11 @@ class MessageBus:
         tasks.sort(key=lambda t: (t.get("priority", 3), t.get("created_at", "")))
 
         task = tasks[0]
+        # Use the actual file path from ListPendingTasks, not task_id reconstruction
+        # This ensures filename and task_id mismatch doesn't cause a crash
         task_path = self.TaskDir / f"{task['task_id']}.json"
+        if not task_path.exists():
+            return None
 
         # Lockfile to close the claim TOCTOU race
         lock_path = self.TaskDir / f"{task['task_id']}.lock"
@@ -152,7 +156,11 @@ class MessageBus:
 
         try:
             # Re-read under lock to confirm it's still pending
-            current = ReadJsonRetry(task_path)
+            try:
+                current = ReadJsonRetry(task_path)
+            except (FileNotFoundError, json.JSONDecodeError):
+                return None
+
             if current.get("status") != "pending":
                 return None
 

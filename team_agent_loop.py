@@ -356,7 +356,8 @@ def RunAgent(agent_cfg, task_description, bus, budget, memory, providers_cfg):
         except Exception as e:
             print(f"  API ERROR: {e}")
             bus.Log(agent_id, f"API error on turn {turn + 1}: {e}")
-            break
+            cost_msg = f"Session cost: ${session_cost:.6f}"
+            return f"[API ERROR] {str(e)[:200]}. {cost_msg}"
 
         choice = resp.choices[0]
         msg = choice.message
